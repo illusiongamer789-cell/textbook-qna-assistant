@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Textbook Q&A with Python & Gemini</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border-left-color: #09f;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .prose-custom p { margin-bottom: 1rem; }
+        .prose-custom ul, .prose-custom ol { margin-left: 1.5rem; margin-bottom: 1rem; }
+        .prose-custom li { margin-bottom: 0.5rem; }
+        .prose-custom strong { font-weight: 600; }
+        .prose-custom code { background-color: #374151; padding: 0.2em 0.4em; margin: 0; font-size: 85%; border-radius: 6px; }
+        .prose-custom pre { background-color: #1f2937; padding: 1rem; border-radius: 0.5rem; overflow-x: auto; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 antialiased">
+
+    <div class="container mx-auto max-w-4xl h-[95vh] flex flex-col p-4 md:p-8">
+        
+        <header class="text-center mb-6">
+            <h1 class="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-400 to-teal-300 bg-clip-text text-transparent mb-2">Textbook Q&A (Python Edition)</h1>
+            <p class="text-gray-400">Chat with your textbook, powered by a Flask backend.</p>
+        </header>
+
+        <main class="flex-grow flex flex-col bg-gray-800 p-4 rounded-2xl shadow-lg min-h-0">
+            <!-- File Upload Screen -->
+            <div id="uploadScreen" class="flex flex-col items-center justify-center h-full text-center">
+                <h2 class="text-2xl font-semibold mb-3 text-white">Upload Your Textbook</h2>
+                <p class="text-gray-400 mb-6">Supports .txt and .pdf files</p>
+                <div class="w-full max-w-md">
+                    <input type="file" id="fileUpload" accept=".txt,.pdf" class="w-full text-sm text-gray-400 file:mr-4 file:py-3 file:px-5 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer transition-colors">
+                    <p id="fileStatus" class="text-sm text-teal-400 mt-4 font-medium h-5">&nbsp;</p>
+                </div>
+            </div>
+
+            <!-- Chat Screen -->
+            <div id="chatScreen" class="hidden flex-grow flex flex-col min-h-0">
+                <div class="flex justify-between items-center mb-3 border-b border-gray-700 pb-3">
+                    <div class="flex items-center min-w-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-teal-400 mr-2 flex-shrink-0"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+                        <p id="fileName" class="font-semibold text-white truncate"></p>
+                    </div>
+                </div>
+                
+                <div id="chatHistory" class="flex-grow overflow-y-auto pr-2 space-y-6">
+                    <!-- Chat messages will be appended here -->
+                </div>
+
+                <div id="loader" class="hidden items-center mt-4">
+                     <div class="spinner"></div>
+                     <p class="ml-3 text-gray-400">Gemini is thinking...</p>
+                </div>
+                
+                <div class="mt-4 flex items-center gap-3">
+                    <input type="text" id="userQuestion" class="flex-grow p-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ask a question...">
+                    <button id="getAnswerBtn" class="bg-teal-500 text-white font-bold p-3 rounded-lg hover:bg-teal-600 focus:outline-none focus:ring-2 focus:ring-teal-400 transition-colors duration-200">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const uploadScreen = document.getElementById('uploadScreen');
+        const chatScreen = document.getElementById('chatScreen');
+        const fileUpload = document.getElementById('fileUpload');
+        const fileStatus = document.getElementById('fileStatus');
+        const fileNameEl = document.getElementById('fileName');
+        const chatHistory = document.getElementById('chatHistory');
+        const userQuestion = document.getElementById('userQuestion');
+        const getAnswerBtn = document.getElementById('getAnswerBtn');
+        const loader = document.getElementById('loader');
+
+        const API_BASE_URL = 'http://127.0.0.1:5000'; // The address of your Flask server
+
+        fileUpload.addEventListener('change', handleFileUpload);
+        getAnswerBtn.addEventListener('click', getAnswer);
+        userQuestion.addEventListener('keyup', (e) => { if (e.key === 'Enter') getAnswer(); });
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            fileStatus.textContent = `Uploading "${file.name}"...`;
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/upload`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Upload failed');
+                }
+                
+                fileNameEl.textContent = file.name;
+                fileStatus.textContent = `✅ Successfully processed. Ready to chat!`;
+                
+                setTimeout(() => {
+                    uploadScreen.classList.add('hidden');
+                    chatScreen.classList.remove('hidden');
+                    addMessageToHistory('model', `Ready to answer questions about "${file.name}". What would you like to know?`);
+                }, 1500);
+
+            } catch (error) {
+                console.error("Error uploading file:", error);
+                fileStatus.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function getAnswer() {
+            const question = userQuestion.value.trim();
+            if (!question) return;
+            
+            addMessageToHistory('user', question);
+            userQuestion.value = '';
+            loader.style.display = 'flex'; // Use style.display for direct control
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/ask`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: question }),
+                });
+                
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Failed to get answer');
+                }
+                
+                addMessageToHistory('model', result.answer);
+
+            } catch (error) {
+                addMessageToHistory('model', `An error occurred: ${error.message}`);
+            } finally {
+                loader.style.display = 'none';
+            }
+        }
+
+        function addMessageToHistory(role, content) {
+            const messageDiv = document.createElement('div');
+            const isModel = role === 'model';
+            
+            const icon = isModel 
+                ? `<div class="w-8 h-8 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white flex-shrink-0">G</div>` 
+                : `<div class="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center font-bold text-white flex-shrink-0">You</div>`;
+
+            let renderedContent = isModel ? marked.parse(content, { gfm: true, breaks: true }) : content.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+            messageDiv.className = `flex items-start gap-3 ${isModel ? '' : 'flex-row-reverse'}`;
+            messageDiv.innerHTML = `
+                ${isModel ? icon : ''}
+                <div class="bg-gray-700 rounded-lg p-3 max-w-xl ${isModel ? 'rounded-tl-none' : 'rounded-tr-none'}">
+                    <div class="prose-custom text-gray-200">${renderedContent}</div>
+                </div>
+                ${!isModel ? icon : ''}`;
+            chatHistory.appendChild(messageDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+    </script>
+</body>
+</html>
